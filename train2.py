@@ -198,8 +198,7 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
                 cur_output, _ = model(batch_x, device)
                 masked_output = cur_output * batch_mask
-                loss = 0.7 * batch_y * torch.log(masked_output + 1e-7) + 0.3 * (1 - batch_y) * torch.log(1 - masked_output + 1e-7)
-                #loss = 0.7 * torch.pow(batch_y,1.5) * torch.log(masked_output + 1e-7) + 0.3 * torch.pow((1-batch_y),1.5) * torch.log(1 - masked_output + 1e-7)
+                loss = batch_y * torch.log(masked_output + 1e-7) + (1 - batch_y) * torch.log(1 - masked_output + 1e-7)
                 loss = torch.sum(loss, dim=1) / torch.sum(batch_mask, dim=1)
                 loss = torch.neg(torch.sum(loss))
                 cur_batch_loss.append(loss.cpu().detach().numpy())

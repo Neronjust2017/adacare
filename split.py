@@ -19,13 +19,20 @@ with open(test_listfile, "r") as lfile:
 train_data = os.listdir(train_pth)
 test_data = os.listdir(test_pth)
 
-for k in range(5):
+for k in range(1, 5):
     # train_val proportion: 0.85:0.15
     N = len(train_data)
-    # np.random.seed(k)
+    np.random.seed(k)
     ind = np.random.permutation(N)
-    train_file = train_data[:int(0.85*N)]
-    val_file = train_data[int(0.85*N):]
+    train_ind = list(ind[:int(0.85*N)])
+    val_ind = list(ind[int(0.85*N):])
+
+    train_file = []
+    val_file = []
+    for i in train_ind:
+        train_file.append(train_data[i])
+    for i in val_ind:
+        val_file.append(train_data[i])
 
     train_list_new = []
     val_list_new = []
