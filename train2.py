@@ -5,9 +5,9 @@ import imp
 import re
 import pickle
 import random
-# import matplotlib.pyplot as plt
-# import matplotlib as mpl
-from thop import profile
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
 RANDOM_SEED = 12345
 np.random.seed(RANDOM_SEED)
 random.seed(RANDOM_SEED)
@@ -21,7 +21,7 @@ import torch.nn.functional as F
 
 torch.manual_seed(RANDOM_SEED)
 torch.cuda.manual_seed(RANDOM_SEED)
-torch.backends.cudnn.deterministic=True
+torch.backends.cudnn.deterministic = True
 
 from utils import utils
 from utils.readers import DecompensationReader
@@ -29,19 +29,15 @@ from utils.preprocessing import Discretizer, Normalizer
 from utils import metrics
 from utils import common_utils
 from model2 import AdaCare
+from tensorboardX import SummaryWriter
 
 def parse_arguments(parser):
-    parser.add_argument('--gpu_id', type=str, default='1')
-    parser.add_argument('--split', type=str, default='0')
-
     parser.add_argument('--test_mode', type=int, default=0, help='Test SA-CRNN on MIMIC-III dataset')
-    parser.add_argument('--data_path', type=str, metavar='<data_path>', help='The path to the MIMIC-III data directory',default='data/')
-    #parser.add_argument('--data_path', type=str, metavar='<data_path>', help='The path to the MIMIC-III data directory',default='../adacare/in-hospital-mortality/')
-
-    parser.add_argument('--file_name', type=str, metavar='<data_path>', help='File name to save model',default='trained_model')
+    parser.add_argument('--data_path', type=str, metavar='<data_path>', help='The path to the MIMIC-III data directory')
+    parser.add_argument('--file_name', type=str, metavar='<data_path>', default='adacare')
     parser.add_argument('--small_part', type=int, default=0, help='Use part of training data')
     parser.add_argument('--batch_size', type=int, default=128, help='Training batch size')
-    parser.add_argument('--epochs', type=int, default=8, help='Training epochs')
+    parser.add_argument('--epochs', type=int, default=50, help='Training epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learing rate')
 
     parser.add_argument('--input_dim', type=int, default=76, help='Dimension of visit record data')
@@ -52,16 +48,16 @@ def parse_arguments(parser):
     parser.add_argument('--r_conv', type=int, default=4, help='Compress ration r for convolutional features')
     parser.add_argument('--kernel_size', type=int, default=2, help='Convolutional kernel size')
     parser.add_argument('--kernel_num', type=int, default=64, help='Number of convolutional filters')
-    parser.add_argument('--activation_func', type=str, default='sigmoid', help='Activation function for feature recalibration (sigmoid / sparsemax)')
+    parser.add_argument('--activation_func', type=str, default='sigmoid',
+                        help='Activation function for feature recalibration (sigmoid / sparsemax)')
 
     args = parser.parse_args()
     return args
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     args = parse_arguments(parser)
-
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
 
     if args.test_mode == 1:
         print('Preparing test data ... ')
@@ -69,7 +65,7 @@ if __name__ == '__main__':
         train_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(
             args.data_path, 'train'), listfile=os.path.join(args.data_path, 'train_listfile.csv'), small_part=True)
         discretizer = Discretizer(timestep=1.0, store_masks=True,
-                                impute_strategy='previous', start_time='zero')
+                                  impute_strategy='previous', start_time='zero')
 
         discretizer_header = discretizer.transform(train_data_loader._data["X"][0])[1].split(',')
         cont_channels = [i for (i, x) in enumerate(discretizer_header) if x.find("->") == -1]
@@ -80,18 +76,20 @@ if __name__ == '__main__':
         normalizer.load_params(normalizer_state)
 
         test_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(args.data_path, 'test'),
-                                                                        listfile=os.path.join(args.data_path, 'test_listfile.csv'), small_part=args.small_part)
+                                                                  listfile=os.path.join(args.data_path,
+                                                                                        'test_listfile.csv'),
+                                                                  small_part=args.small_part)
         test_data_gen = utils.BatchGenDeepSupervision(test_data_loader, discretizer,
-                                                    normalizer, args.batch_size,
-                                                    shuffle=False, return_names=True)
+                                                      normalizer, args.batch_size,
+                                                      shuffle=False, return_names=True)
 
         print('Constructing model ... ')
-        device = torch.device("cuda" if torch.cuda.is_available() == True else 'cpu')
+        device = torch.device("cuda:0" if torch.cuda.is_available() == True else 'cpu')
         print("available device: {}".format(device))
 
         model = AdaCare(device=device).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-        
+
         checkpoint = torch.load('./saved_weights/AdaCare')
         save_chunk = checkpoint['chunk']
         print("last saved model is in chunk {}".format(save_chunk))
@@ -102,7 +100,7 @@ if __name__ == '__main__':
             cur_test_loss = []
             test_true = []
             test_pred = []
-            
+
             for each_batch in range(test_data_gen.steps):
                 test_data = next(test_data_gen)
                 test_name = test_data['names']
@@ -111,26 +109,28 @@ if __name__ == '__main__':
                 test_x = torch.tensor(test_data[0][0], dtype=torch.float32).to(device)
                 test_mask = torch.tensor(test_data[0][1], dtype=torch.float32).unsqueeze(-1).to(device)
                 test_y = torch.tensor(test_data[1], dtype=torch.float32).to(device)
-                
+
                 if test_mask.size()[1] > 400:
                     test_x = test_x[:, :400, :]
                     test_mask = test_mask[:, :400, :]
                     test_y = test_y[:, :400, :]
-                
+
                 test_output, test_att = model(test_x, device)
                 masked_test_output = test_output * test_mask
 
-                test_loss = test_y * torch.log(masked_test_output + 1e-7) + (1 - test_y) * torch.log(1 - masked_test_output + 1e-7)
+                test_loss = test_y * torch.log(masked_test_output + 1e-7) + (1 - test_y) * torch.log(
+                    1 - masked_test_output + 1e-7)
                 test_loss = torch.sum(test_loss, dim=1) / torch.sum(test_mask, dim=1)
                 test_loss = torch.neg(torch.sum(test_loss))
-                cur_test_loss.append(test_loss.cpu().detach().numpy()) 
-                
-                for m, t, p in zip(test_mask.cpu().numpy().flatten(), test_y.cpu().numpy().flatten(), test_output.cpu().detach().numpy().flatten()):
+                cur_test_loss.append(test_loss.cpu().detach().numpy())
+
+                for m, t, p in zip(test_mask.cpu().numpy().flatten(), test_y.cpu().numpy().flatten(),
+                                   test_output.cpu().detach().numpy().flatten()):
                     if np.equal(m, 1):
                         test_true.append(t)
                         test_pred.append(p)
-            
-            print('Test loss = %.4f'%(np.mean(np.array(cur_test_loss))))
+
+            print('Test loss = %.4f' % (np.mean(np.array(cur_test_loss))))
             print('\n')
             test_pred = np.array(test_pred)
             test_pred = np.stack([1 - test_pred, test_pred], axis=1)
@@ -140,14 +140,13 @@ if __name__ == '__main__':
         ''' Prepare training data'''
         print('Preparing training data ... ')
         train_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(
-            args.data_path, 'train'), listfile=os.path.join(args.data_path, 'train_listfile_{}.csv'.format(args.split)), small_part=args.small_part)
-
-        val_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(
-            args.data_path, 'train'), listfile=os.path.join(args.data_path, 'val_listfile_{}.csv'.format(args.split)),
+            args.data_path, 'train'), listfile=os.path.join(args.data_path, 'train_listfile.csv'),
             small_part=args.small_part)
-
+        val_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(
+            args.data_path, 'train'), listfile=os.path.join(args.data_path, 'val_listfile.csv'),
+            small_part=args.small_part)
         discretizer = Discretizer(timestep=1.0, store_masks=True,
-                                impute_strategy='previous', start_time='zero')
+                                  impute_strategy='previous', start_time='zero')
 
         discretizer_header = discretizer.transform(train_data_loader._data["X"][0])[1].split(',')
         cont_channels = [i for (i, x) in enumerate(discretizer_header) if x.find("->") == -1]
@@ -158,15 +157,17 @@ if __name__ == '__main__':
         normalizer.load_params(normalizer_state)
 
         train_data_gen = utils.BatchGenDeepSupervision(train_data_loader, discretizer,
-                                                        normalizer, args.batch_size, shuffle=True, return_names=True)
+                                                       normalizer, args.batch_size, shuffle=True, return_names=True)
         val_data_gen = utils.BatchGenDeepSupervision(val_data_loader, discretizer,
-                                                    normalizer, args.batch_size, shuffle=False, return_names=True)
+                                                     normalizer, args.batch_size, shuffle=False, return_names=True)
+
         '''Model structure'''
         print('Constructing model ... ')
-        device = torch.device("cuda" if torch.cuda.is_available() == True else 'cpu')
+        device = torch.device("cuda:0" if torch.cuda.is_available() == True else 'cpu')
         print("available device: {}".format(device))
 
-        model = AdaCare(args.rnn_dim, args.kernel_size, args.kernel_num, args.input_dim, args.output_dim, args.dropout_rate, args.r_visit, args.r_conv, args.activation_func, device).to(device)
+        model = AdaCare(args.rnn_dim, args.kernel_size, args.kernel_num, args.input_dim, args.output_dim,
+                        args.dropout_rate, args.r_visit, args.r_conv, args.activation_func, device).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
         '''Train phase'''
@@ -177,7 +178,8 @@ if __name__ == '__main__':
         batch_loss = []
         max_auprc = 0
 
-        file_name = './saved_weights/'+args.file_name + '_' + args.split
+        file_name = './saved_weights/' + args.file_name + '_' + args.split + '/model'
+        log_writer = SummaryWriter('./saved_weights/' + args.file_name + '_' + args.split + '/tb_log')
         for each_chunk in range(args.epochs):
             cur_batch_loss = []
             model.train()
@@ -189,7 +191,7 @@ if __name__ == '__main__':
                 batch_x = torch.tensor(batch_data[0][0], dtype=torch.float32).to(device)
                 batch_mask = torch.tensor(batch_data[0][1], dtype=torch.float32).unsqueeze(-1).to(device)
                 batch_y = torch.tensor(batch_data[1], dtype=torch.float32).to(device)
-               
+
                 if batch_mask.size()[1] > 400:
                     batch_x = batch_x[:, :400, :]
                     batch_mask = batch_mask[:, :400, :]
@@ -205,13 +207,14 @@ if __name__ == '__main__':
 
                 loss.backward()
                 optimizer.step()
-                
+
                 if each_batch % 50 == 0:
-                    print('Chunk %d, Batch %d: Loss = %.4f'%(each_chunk, each_batch, cur_batch_loss[-1]))
+                    print('Chunk %d, Batch %d: Loss = %.4f' % (each_chunk, each_batch, cur_batch_loss[-1]))
 
             batch_loss.append(cur_batch_loss)
             train_loss.append(np.mean(np.array(cur_batch_loss)))
-            
+            log_writer.add_scalar('train_loss', np.mean(np.array(cur_batch_loss)), each_chunk)
+
             print("\n==>Predicting on validation")
             with torch.no_grad():
                 model.eval()
@@ -222,38 +225,47 @@ if __name__ == '__main__':
                     valid_data = next(val_data_gen)
                     valid_name = valid_data['names']
                     valid_data = valid_data['data']
-                    
+
                     valid_x = torch.tensor(valid_data[0][0], dtype=torch.float32).to(device)
                     valid_mask = torch.tensor(valid_data[0][1], dtype=torch.float32).unsqueeze(-1).to(device)
                     valid_y = torch.tensor(valid_data[1], dtype=torch.float32).to(device)
-                    
+
                     if valid_mask.size()[1] > 400:
                         valid_x = valid_x[:, :400, :]
                         valid_mask = valid_mask[:, :400, :]
                         valid_y = valid_y[:, :400, :]
-                    
+
                     valid_output, valid_dis = model(valid_x, device)
-                    flops, params = profile(model, inputs=(valid_x,device))
-                    print('--------------------------parameters & flops---------------------------')
-                    print('flops: ',flops,' params: ',params)
                     masked_valid_output = valid_output * valid_mask
 
-                    valid_loss = valid_y * torch.log(masked_valid_output + 1e-7) + (1 - valid_y) * torch.log(1 - masked_valid_output + 1e-7)
+                    valid_loss = valid_y * torch.log(masked_valid_output + 1e-7) + (1 - valid_y) * torch.log(
+                        1 - masked_valid_output + 1e-7)
                     valid_loss = torch.sum(valid_loss, dim=1) / torch.sum(valid_mask, dim=1)
                     valid_loss = torch.neg(torch.sum(valid_loss))
                     cur_val_loss.append(valid_loss.cpu().detach().numpy())
 
-                    for m, t, p in zip(valid_mask.cpu().numpy().flatten(), valid_y.cpu().numpy().flatten(), valid_output.cpu().detach().numpy().flatten()):
+                    for m, t, p in zip(valid_mask.cpu().numpy().flatten(), valid_y.cpu().numpy().flatten(),
+                                       valid_output.cpu().detach().numpy().flatten()):
                         if np.equal(m, 1):
                             valid_true.append(t)
                             valid_pred.append(p)
 
                 val_loss.append(np.mean(np.array(cur_val_loss)))
-                print('Valid loss = %.4f'%(val_loss[-1]))
+                print('Valid loss = %.4f' % (val_loss[-1]))
                 print('\n')
                 valid_pred = np.array(valid_pred)
                 valid_pred = np.stack([1 - valid_pred, valid_pred], axis=1)
                 ret = metrics.print_metrics_binary(valid_true, valid_pred)
+
+                log_writer.add_scalar('val_loss', val_loss[-1], each_chunk)
+                log_writer.add_scalar('val_acc', ret['acc'], each_chunk)
+                log_writer.add_scalar('val_prec0', ret['prec0'], each_chunk)
+                log_writer.add_scalar('val_prec1', ret['prec1'], each_chunk)
+                log_writer.add_scalar('val_rec0', ret['rec0'], each_chunk)
+                log_writer.add_scalar('val_rec1', ret['rec1'], each_chunk)
+                log_writer.add_scalar('val_auroc', ret['auroc'], each_chunk)
+                log_writer.add_scalar('val_auprc', ret['auprc'], each_chunk)
+                log_writer.add_scalar('val_minpse', ret['minpse'], each_chunk)
                 print()
 
                 cur_auprc = ret['auprc']
@@ -267,16 +279,6 @@ if __name__ == '__main__':
                     torch.save(state, file_name)
                     print('\n------------ Save best model ------------\n')
 
-        '''Parameters phase'''
-        print('Parameters...')
-        # Find total parameters and trainable parameters
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f'{total_params:,} total parameters.')
-        total_trainable_params = sum(
-            p.numel() for p in model.parameters() if p.requires_grad)
-        print(f'{total_trainable_params:,} training parameters.')
-
-
         '''Evaluate phase'''
         print('Testing model ... ')
 
@@ -288,20 +290,22 @@ if __name__ == '__main__':
         model.eval()
 
         test_data_loader = common_utils.DeepSupervisionDataLoader(dataset_dir=os.path.join(args.data_path, 'test'),
-                                                                        listfile=os.path.join(args.data_path,'test', 'listfile.csv'), small_part=args.small_part)
+                                                                  listfile=os.path.join(args.data_path,
+                                                                                        'test_listfile.csv'),
+                                                                  small_part=args.small_part)
         test_data_gen = utils.BatchGenDeepSupervision(test_data_loader, discretizer,
-                                                    normalizer, args.batch_size,
-                                                    shuffle=False, return_names=True)
+                                                      normalizer, args.batch_size,
+                                                      shuffle=False, return_names=True)
 
         with torch.no_grad():
             torch.manual_seed(RANDOM_SEED)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(RANDOM_SEED)
-        
+
             cur_test_loss = []
             test_true = []
             test_pred = []
-            
+
             for each_batch in range(test_data_gen.steps):
                 test_data = next(test_data_gen)
                 test_name = test_data['names']
@@ -310,7 +314,7 @@ if __name__ == '__main__':
                 test_x = torch.tensor(test_data[0][0], dtype=torch.float32).to(device)
                 test_mask = torch.tensor(test_data[0][1], dtype=torch.float32).unsqueeze(-1).to(device)
                 test_y = torch.tensor(test_data[1], dtype=torch.float32).to(device)
-                
+
                 if test_mask.size()[1] > 400:
                     test_x = test_x[:, :400, :]
                     test_mask = test_mask[:, :400, :]
@@ -319,17 +323,19 @@ if __name__ == '__main__':
                 test_output, test_dis = model(test_x, device)
                 masked_test_output = test_output * test_mask
 
-                test_loss = test_y * torch.log(masked_test_output + 1e-7) + (1 - test_y) * torch.log(1 - masked_test_output + 1e-7)
+                test_loss = test_y * torch.log(masked_test_output + 1e-7) + (1 - test_y) * torch.log(
+                    1 - masked_test_output + 1e-7)
                 test_loss = torch.sum(test_loss, dim=1) / torch.sum(test_mask, dim=1)
                 test_loss = torch.neg(torch.sum(test_loss))
-                cur_test_loss.append(test_loss.cpu().detach().numpy()) 
-                
-                for m, t, p in zip(test_mask.cpu().numpy().flatten(), test_y.cpu().numpy().flatten(), test_output.cpu().detach().numpy().flatten()):
+                cur_test_loss.append(test_loss.cpu().detach().numpy())
+
+                for m, t, p in zip(test_mask.cpu().numpy().flatten(), test_y.cpu().numpy().flatten(),
+                                   test_output.cpu().detach().numpy().flatten()):
                     if np.equal(m, 1):
                         test_true.append(t)
                         test_pred.append(p)
-            
-            print('Test loss = %.4f'%(np.mean(np.array(cur_test_loss))))
+
+            print('Test loss = %.4f' % (np.mean(np.array(cur_test_loss))))
             print('\n')
             test_pred = np.array(test_pred)
             test_pred = np.stack([1 - test_pred, test_pred], axis=1)

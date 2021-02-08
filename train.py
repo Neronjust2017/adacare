@@ -29,6 +29,7 @@ from utils.preprocessing import Discretizer, Normalizer
 from utils import metrics
 from utils import common_utils
 from model import AdaCare
+from tensorboardX import SummaryWriter
 
 def parse_arguments(parser):
     parser.add_argument('--gpu_id', type=str, default='0')
@@ -38,10 +39,10 @@ def parse_arguments(parser):
     parser.add_argument('--data_path', type=str, metavar='<data_path>', help='The path to the MIMIC-III data directory',default='data/')
     #parser.add_argument('--data_path', type=str, metavar='<data_path>', help='The path to the MIMIC-III data directory',default='../adacare/in-hospital-mortality/')
 
-    parser.add_argument('--file_name', type=str, metavar='<data_path>', help='File name to save model',default='trained_model')
+    parser.add_argument('--file_name', type=str, metavar='<data_path>', help='File name to save model',default='adacare+')
     parser.add_argument('--small_part', type=int, default=0, help='Use part of training data')
     parser.add_argument('--batch_size', type=int, default=128, help='Training batch size')
-    parser.add_argument('--epochs', type=int, default=8, help='Training epochs')
+    parser.add_argument('--epochs', type=int, default=50, help='Training epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learing rate')
 
     parser.add_argument('--input_dim', type=int, default=76, help='Dimension of visit record data')
@@ -177,7 +178,8 @@ if __name__ == '__main__':
         batch_loss = []
         max_auprc = 0
 
-        file_name = './saved_weights/'+args.file_name + '_' + args.split
+        file_name = './saved_weights/'+args.file_name + '_' + args.split + '/model'
+        log_writer = SummaryWriter('./saved_weights/'+args.file_name + '_' + args.split + '/tb_log')
         for each_chunk in range(args.epochs):
             cur_batch_loss = []
             model.train()
@@ -212,7 +214,8 @@ if __name__ == '__main__':
 
             batch_loss.append(cur_batch_loss)
             train_loss.append(np.mean(np.array(cur_batch_loss)))
-            
+            log_writer.add_scalar('train_loss', np.mean(np.array(cur_batch_loss)), each_chunk)
+
             print("\n==>Predicting on validation")
             with torch.no_grad():
                 model.eval()
@@ -255,6 +258,16 @@ if __name__ == '__main__':
                 valid_pred = np.array(valid_pred)
                 valid_pred = np.stack([1 - valid_pred, valid_pred], axis=1)
                 ret = metrics.print_metrics_binary(valid_true, valid_pred)
+
+                log_writer.add_scalar('val_loss', val_loss[-1], each_chunk)
+                log_writer.add_scalar('val_acc', ret['acc'], each_chunk)
+                log_writer.add_scalar('val_prec0', ret['prec0'], each_chunk)
+                log_writer.add_scalar('val_prec1', ret['prec1'], each_chunk)
+                log_writer.add_scalar('val_rec0', ret['rec0'], each_chunk)
+                log_writer.add_scalar('val_rec1', ret['rec1'], each_chunk)
+                log_writer.add_scalar('val_auroc', ret['auroc'], each_chunk)
+                log_writer.add_scalar('val_auprc', ret['auprc'], each_chunk)
+                log_writer.add_scalar('val_minpse', ret['minpse'], each_chunk)
                 print()
 
                 cur_auprc = ret['auprc']
