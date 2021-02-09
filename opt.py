@@ -33,8 +33,8 @@ from utils.lr_scheduler import GradualWarmupScheduler
 from model import AdaCare
 from tensorboardX import SummaryWriter
 from hyperopt import hp, tpe, fmin, Trials
-from hyper_opt.util import init_obj, to_np, get_mnt_mode, save_checkpoint, \
-    write_json, get_logger, analyze, progress, load_checkpoint
+from pathlib import Path
+import json
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -46,10 +46,10 @@ space = {
         {
             "input_dim": 76,
             "output_dim": 1,
-            "rnn_dim": hp.choice('rnn_dim', [384]),
-            "kernel_size": hp.choice('kernel_size', [2]),
-            "kernel_num": hp.choice('kernel_num', [384]),
-            "dropout_rate": hp.choice('dropout_rate', [0.5]),
+            "hidden_dim": hp.choice('hidden_dim', [384]),
+            "kernel_size": hp.choice('kernel_size', [2,4]),
+            "kernel_num": hp.choice('kernel_num', [64]),
+            "dropout": hp.choice('dropout', [0.5]),
         },
 
     'batch_size': hp.choice('batch_size', [128]),
@@ -61,7 +61,7 @@ space = {
                 'type': 'Adam',
                 'args':
                     {
-                        'lr': hp.choice('lr', [0.001, 0.0005]),
+                        'lr': hp.choice('lr', [0.001, 0.01]),
                         'weight_decay': hp.choice('weight_decay', [1e-3, 1e-4]),
                         'amsgrad': True
                     }
@@ -89,7 +89,7 @@ space = {
                 "type": "StepLR",
                 "args":
                     {
-                        "step_size": hp.choice('step_size', [30, 40]),
+                        "step_size": hp.choice('step_size', [10, 30]),
                         "gamma": hp.choice('StepLR_gamma', [0.1, 0.5])
                     }
             },
@@ -119,6 +119,21 @@ space = {
         ]),
 }
 
+def write_json(content, fname):
+    fname = Path(fname)
+    with fname.open('wt') as handle:
+        json.dump(content, handle, indent=4, sort_keys=False)
+
+def init_obj(hype_space, name, module, *args, **kwargs):
+    """
+    Finds a function handle with the name given as 'type' in config, and returns the
+    instance initialized with corresponding arguments given.
+    """
+    module_name = hype_space[name]['type']
+    module_args = dict(hype_space[name]['args'])
+    assert all([k not in module_args for k in kwargs]), 'Overwriting kwargs given in config file is not allowed'
+    module_args.update(kwargs)
+    return getattr(module, module_name)(*args, **module_args)
 
 def opt(hype_space):
     data_path = 'data/'
@@ -132,18 +147,19 @@ def opt(hype_space):
     write_json(hype_space, base_path + '/hype_space.json')
 
     try:
-        loss = []
-        acc = []
-        prec0 = []
-        prec1 = []
-        rec0 = []
-        rec1 = []
-        auroc = []
-        auprc = []
-        minpse = []
+        Loss = []
+        Acc = []
+        Prec0 = []
+        Prec1 = []
+        Rec0 = []
+        Rec1 = []
+        Auroc = []
+        Auprc = []
+        Minpse = []
 
         for split in range(4):
 
+            print("split_" + str(split))
             base_path_split = os.path.join(base_path, 'split_' + str(split))
             # result_dir = os.path.join(base_path_split, 'result')
             file_name = os.path.join(base_path_split, 'model')
@@ -384,60 +400,55 @@ def opt(hype_space):
 
                 with open(result, "a") as f:
                     f.write('split_' + str(split) + "\n")
-                    f.write("accuracy = {}".format(test_ret['acc']))
-                    f.write("precision class 0 = {}".format(test_ret['prec0']))
-                    f.write("precision class 1 = {}".format(test_ret['prec1']))
-                    f.write("recall class 0 = {}".format(test_ret['rec0']))
-                    f.write("recall class 1 = {}".format(test_ret['rec1']))
-                    f.write("AUC of ROC = {}".format(test_ret['auroc']))
-                    f.write("AUC of PRC = {}".format(test_ret['auprc']))
-                    f.write("min(+P, Se) = {}".format(test_ret['minpse']))
+                    f.write("accuracy = {}\n".format(test_ret['acc']))
+                    f.write("precision class 0 = {}\n".format(test_ret['prec0']))
+                    f.write("precision class 1 = {}\n".format(test_ret['prec1']))
+                    f.write("recall class 0 = {}\n".format(test_ret['rec0']))
+                    f.write("recall class 1 = {}\n".format(test_ret['rec1']))
+                    f.write("AUC of ROC = {}\n".format(test_ret['auroc']))
+                    f.write("AUC of PRC = {}\n".format(test_ret['auprc']))
+                    f.write("min(+P, Se) = {}\n".format(test_ret['minpse']))
 
-                loss.append(np.mean(np.array(cur_test_loss)))
-                acc.append(test_ret['acc'])
-                prec0.append(test_ret['prec0'])
-                prec1.append(test_ret['prec1'])
-                rec0.append(test_ret['rec0'])
-                rec1.append(test_ret['rec1'])
-                auroc.append(test_ret['auroc'])
-                auprc.append(test_ret['auprc'])
-                minpse.append(test_ret['minpse'])
+                Loss.append(np.mean(np.array(cur_test_loss)))
+                Acc.append(test_ret['acc'])
+                Prec0.append(test_ret['prec0'])
+                Prec1.append(test_ret['prec1'])
+                Rec0.append(test_ret['rec0'])
+                Rec1.append(test_ret['rec1'])
+                Auroc.append(test_ret['auroc'])
+                Auprc.append(test_ret['auprc'])
+                Minpse.append(test_ret['minpse'])
 
         with open(result, "a") as f:
             f.write('AVG' + "\n")
-            f.write("accuracy = {}".format(np.mean(acc)))
-            f.write("precision class 0 = {}".format(np.mean(prec0)))
-            f.write("precision class 1 = {}".format(np.mean(prec1)))
-            f.write("recall class 0 = {}".format(np.mean(rec0)))
-            f.write("recall class 1 = {}".format(np.mean(rec1)))
-            f.write("AUC of ROC = {}".format(np.mean(auroc)))
-            f.write("AUC of PRC = {}".format(np.mean(auprc)))
-            f.write("min(+P, Se) = {}".format(np.mean(minpse)))
+            f.write("accuracy = {}\n".format(np.mean(Acc)))
+            f.write("precision class 0 = {}\n".format(np.mean(Prec0)))
+            f.write("precision class 1 = {}\n".format(np.mean(Prec1)))
+            f.write("recall class 0 = {}\n".format(np.mean(Rec0)))
+            f.write("recall class 1 = {}\n".format(np.mean(Rec1)))
+            f.write("AUC of ROC = {}\n".format(np.mean(Auroc)))
+            f.write("AUC of PRC = {}\n".format(np.mean(Auprc)))
+            f.write("min(+P, Se) = {}\n".format(np.mean(Minpse)))
 
-    except:
+        return - np.mean(Auprc)
+
+    except Exception as e:
+        print("dssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss")
+        print(e)
         return 0
-
-    return - np.mean(auprc)
 
 
 def run_trials():
     """Run one TPE meta optimisation step and save its results."""
     max_evals = nb_evals = 15
 
-    logger = get_logger(save_path + '/trials.log', name='trials')
-
-    logger.info("Attempt to resume a past training if it exists:")
-
     try:
         # https://github.com/hyperopt/hyperopt/issues/267
         trials = pickle.load(open(save_path + "/results.pkl", "rb"))
-        logger.info("Found saved Trials! Loading...")
         max_evals = len(trials.trials) + nb_evals
-        logger.info("Rerunning from {} trials to add another one.".format(
-            len(trials.trials)))
+
     except:
         trials = Trials()
-        logger.info("Starting from scratch: new trials.")
 
     best = fmin(
         opt,
@@ -446,14 +457,11 @@ def run_trials():
         trials=trials,
         max_evals=max_evals,
     )
-
-    logger.info("Best: {}".format(best))
     pickle.dump(trials, open(save_path + "/results.pkl", "wb"))
-    logger.info("\nOPTIMIZATION STEP COMPLETE.\n")
-    logger.info("Trials:")
+
 
     for trial in trials:
-        logger.info(trial)
+        print(trial)
 
 
 if __name__ == "__main__":
