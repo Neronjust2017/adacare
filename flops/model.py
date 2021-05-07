@@ -274,7 +274,8 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     args = train.parse_arguments(parser)
     print('Constructing model ... ')
-    device = torch.device("cuda:0" if torch.cuda.is_available() == True else 'cpu')
+    # device = torch.device("cuda:0" if torch.cuda.is_available() == True else 'cpu')
+    device = 'cpu'
     print("available device: {}".format(device))
     batch_x = torch.rand(128, 400, 76)
     batch_x = torch.tensor(batch_x, dtype=torch.float32).to(device)
@@ -282,6 +283,6 @@ if __name__=='__main__':
     model = AdaCare(args.rnn_dim, args.kernel_size, args.kernel_num, args.input_dim, args.output_dim, args.dropout_rate,
                     args.r_visit, args.r_conv, args.activation_func, device).to(device)
     cur_output, _ = model(batch_x, device)
-    flops, params = profile(model,inputs = (batch_x,device))
+    flops, params = profile(model,inputs = [batch_x,device])
     print("%.2fG" % (flops / 1e9), "%.2fM" % (params / 1e6))
     print('!!!!!!!')
